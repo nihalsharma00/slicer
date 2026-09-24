@@ -27,6 +27,7 @@ interface Props {
 
   zoom: number;
   setZoom: (z: number) => void;
+  onFitZoom: () => void;
 
   onExportZip: () => void;
   onExportJson: () => void;
@@ -42,7 +43,7 @@ export default function Sidebar(props: Props) {
     gridSettings, setGridSettings, cellWidth, cellHeight, setCellWidth, setCellHeight, onGenerateGrid,
     autoSettings, setAutoSettings, onRunAutoDetect, onPickBackgroundColor, pickingColor,
     sprites, selectedId, setSelectedId, onRenameSprite, onDeleteSprite, onClearAll,
-    zoom, setZoom,
+    zoom, setZoom, onFitZoom,
     onExportZip, onExportJson, exporting,
     imageInfo, onNewImage,
   } = props;
@@ -57,18 +58,21 @@ export default function Sidebar(props: Props) {
           </div>
           <button className="btn btn-ghost btn-small" onClick={onNewImage}>Replace</button>
         </div>
-        <label className="zoom-row">
-          Zoom
+        <div className="zoom-row">
+          <span>Zoom</span>
           <input
             type="range"
-            min={1}
+            min={0.1}
             max={12}
-            step={0.5}
+            step={0.1}
             value={zoom}
             onChange={(e) => setZoom(parseFloat(e.target.value))}
           />
           <span className="mono">{zoom.toFixed(1)}×</span>
-        </label>
+          <button className="btn btn-ghost btn-small" title="Fit image to screen" onClick={onFitZoom}>
+            Fit
+          </button>
+        </div>
       </div>
 
       <div className="panel">
@@ -147,17 +151,7 @@ export default function Sidebar(props: Props) {
 
         {mode === 'grid' && (
           <div className="controls">
-            <p className="hint">Slices the sheet into equal cells. Leave columns/rows at 0 to derive them from cell size.</p>
-            <div className="field-row">
-              <label className="field-inline">
-                Cell width
-                <input type="number" min={1} value={cellWidth} onChange={(e) => setCellWidth(parseInt(e.target.value, 10) || 1)} />
-              </label>
-              <label className="field-inline">
-                Cell height
-                <input type="number" min={1} value={cellHeight} onChange={(e) => setCellHeight(parseInt(e.target.value, 10) || 1)} />
-              </label>
-            </div>
+            <p className="hint">Set columns &amp; rows — cell size is calculated automatically. Or set cell size and leave columns/rows at 0.</p>
             <div className="field-row">
               <label className="field-inline">
                 Columns (0 = auto)
@@ -168,6 +162,16 @@ export default function Sidebar(props: Props) {
                 Rows (0 = auto)
                 <input type="number" min={0} value={gridSettings.rows}
                   onChange={(e) => setGridSettings((p) => ({ ...p, rows: parseInt(e.target.value, 10) || 0 }))} />
+              </label>
+            </div>
+            <div className="field-row">
+              <label className="field-inline">
+                Cell width{gridSettings.cols > 0 ? <span className="muted"> (auto)</span> : ''}
+                <input type="number" min={1} value={cellWidth} onChange={(e) => setCellWidth(parseInt(e.target.value, 10) || 1)} />
+              </label>
+              <label className="field-inline">
+                Cell height{gridSettings.rows > 0 ? <span className="muted"> (auto)</span> : ''}
+                <input type="number" min={1} value={cellHeight} onChange={(e) => setCellHeight(parseInt(e.target.value, 10) || 1)} />
               </label>
             </div>
             <div className="field-row">

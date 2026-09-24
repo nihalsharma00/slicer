@@ -1,6 +1,7 @@
-import { useCallback, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import CanvasEditor from './components/CanvasEditor';
 import Sidebar from './components/Sidebar';
+import HelpPage from './components/HelpPage';
 import { autoDetectSprites, generateGrid, isRectEmpty, guessBackgroundColor } from './lib/imageAnalysis';
 import { buildPlan, downloadJson, downloadZip } from './lib/exportUtils';
 import type { AutoSettings, GridSettings, Mode, SpriteRect } from './types';
@@ -40,11 +41,21 @@ function readImageData(img: HTMLImageElement): ImageData {
   return ctx.getImageData(0, 0, canvas.width, canvas.height);
 }
 
+/** Calculate a zoom level that fits the image inside the canvas stage area. */
+function calcFitZoom(imgW: number, imgH: number): number {
+  // Stage area = window minus topbar (~48px) and sidebar (~328px) and padding (80px)
+  const stageW = Math.max(200, window.innerWidth - 328 - 80);
+  const stageH = Math.max(200, window.innerHeight - 48 - 80);
+  const fit = Math.min(stageW / imgW, stageH / imgH);
+  // Snap to nice values: round down to nearest 0.25, clamp 0.1–8
+  return Math.min(8, Math.max(0.1, Math.floor(fit * 4) / 4));
+}
+
 export default function App() {
   const [image, setImage] = useState<LoadedImage | null>(null);
   const [sprites, setSpritesRaw] = useState<SpriteRect[]>([]);
   const [mode, setMode] = useState<Mode>('auto');
-  const [zoom, setZoom] = useState(2);
+  const [zoom, setZoom] = useState(1);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [gridSettings, setGridSettings] = useState<GridSettings>(DEFAULT_GRID);
   const [cellWidth, setCellWidth] = useState(32);
@@ -53,25 +64,66 @@ export default function App() {
   const [pickingColor, setPickingColor] = useState(false);
   const [exporting, setExporting] = useState(false);
   const [dragOver, setDragOver] = useState(false);
+  const [showHelp, setShowHelp] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const setSprites = useCallback((updater: (prev: SpriteRect[]) => SpriteRect[]) => {
     setSpritesRaw((prev) => updater(prev));
   }, []);
 
+  /** Fit zoom to current image and window size */
+  const fitZoom = useCallback((img?: HTMLImageElement) => {
+    const el = img ?? image?.el;
+    if (!el) return;
+    setZoom(calcFitZoom(el.naturalWidth, el.naturalHeight));
+  }, [image]);
+
   function loadFile(file: File) {
     const url = URL.createObjectURL(file);
     const img = new Image();
     img.onload = () => {
       const data = readImageData(img);
+      // Auto-fit zoom when image loads
+      const fit = calcFitZoom(img.naturalWidth, img.naturalHeight);
+      setZoom(fit);
       setImage({ el: img, data, name: file.name });
       setSprites(() => []);
       setSelectedId(null);
       setAutoSettings((p) => ({ ...p, bgColor: null }));
+      // Reset grid settings & auto-populate cellWidth/Height
+      setGridSettings(DEFAULT_GRID);
+      setCellWidth(img.naturalWidth);
+      setCellHeight(img.naturalHeight);
       URL.revokeObjectURL(url);
     };
     img.src = url;
   }
+
+  // Re-fit when window resizes (only if image is loaded)
+  useEffect(() => {
+    if (!image) return;
+    const handler = () => fitZoom();
+    window.addEventListener('resize', handler);
+    return () => window.removeEventListener('resize', handler);
+  }, [image, fitZoom]);
+
+  // Auto-compute cellWidth / cellHeight when cols/rows change
+  useEffect(() => {
+    if (!image) return;
+    const { cols, rows, offsetX, offsetY, spacingX, spacingY } = gridSettings;
+    const imgW = image.el.naturalWidth;
+    const imgH = image.el.naturalHeight;
+    if (cols > 0) {
+      const usableW = imgW - offsetX - spacingX * (cols - 1);
+      const cw = Math.max(1, Math.floor(usableW / cols));
+      setCellWidth(cw);
+    }
+    if (rows > 0) {
+      const usableH = imgH - offsetY - spacingY * (rows - 1);
+      const ch = Math.max(1, Math.floor(usableH / rows));
+      setCellHeight(ch);
+    }
+  }, [gridSettings, image]);
 
   function handleFileInput(e: React.ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0];
@@ -181,6 +233,9 @@ export default function App() {
           Sprite Slicer
         </div>
         <span className="muted">Slice sheets into sprites, then export the plan.</span>
+        <button className="btn btn-ghost btn-small topbar-help" onClick={() => setShowHelp(true)}>
+          ? Help
+        </button>
       </header>
       <div className="workspace">
         <CanvasEditor
@@ -217,6 +272,7 @@ export default function App() {
           onClearAll={() => { setSprites(() => []); setSelectedId(null); }}
           zoom={zoom}
           setZoom={setZoom}
+          onFitZoom={() => fitZoom()}
           onExportZip={handleExportZip}
           onExportJson={handleExportJson}
           exporting={exporting}
@@ -224,6 +280,7 @@ export default function App() {
           onNewImage={() => setImage(null)}
         />
       </div>
+      {showHelp && <HelpPage onClose={() => setShowHelp(false)} />}
     </div>
   );
 }
