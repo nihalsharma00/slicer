@@ -29,6 +29,9 @@ interface Props {
   setZoom: (z: number) => void;
   onFitZoom: () => void;
 
+  boxColor: string;
+  setBoxColor: (c: string) => void;
+
   onExportZip: () => void;
   onExportJson: () => void;
   exporting: boolean;
@@ -44,6 +47,7 @@ export default function Sidebar(props: Props) {
     autoSettings, setAutoSettings, onRunAutoDetect, onPickBackgroundColor, pickingColor,
     sprites, selectedId, setSelectedId, onRenameSprite, onDeleteSprite, onClearAll,
     zoom, setZoom, onFitZoom,
+    boxColor, setBoxColor,
     onExportZip, onExportJson, exporting,
     imageInfo, onNewImage,
   } = props;
@@ -73,6 +77,18 @@ export default function Sidebar(props: Props) {
             Fit
           </button>
         </div>
+        <div className="box-color-row">
+          <span>Box color</span>
+          <input
+            type="color"
+            value={boxColor}
+            onChange={(e) => setBoxColor(e.target.value)}
+            title="Pick box color"
+            className="color-picker-input"
+          />
+          <span className="muted" style={{ fontSize: 11, fontFamily: 'monospace' }}>{boxColor}</span>
+          <button className="btn btn-ghost btn-small" onClick={() => setBoxColor('#5fc9ff')} title="Reset to default">↺</button>
+        </div>
       </div>
 
       <div className="panel">
@@ -84,7 +100,9 @@ export default function Sidebar(props: Props) {
 
         {mode === 'auto' && (
           <div className="controls">
-            <p className="hint">Finds sprites by separating them from the background, using transparency or a background color.</p>
+            <p className="hint">
+              <strong>Smart detect:</strong> automatically finds grid separators (border lines between frames) or separates sprites from a transparent / solid-color background.
+            </p>
             <label className="check-row">
               <input
                 type="checkbox"

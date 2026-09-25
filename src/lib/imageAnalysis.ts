@@ -38,7 +38,6 @@ function isBackgroundPixel(
   const a = px[i + 3];
   if (settings.useAlpha) {
     if (a <= 8) return true;
-    // fall through to also allow a solid bg color check combined with alpha
   }
   const r = px[i];
   const g = px[i + 1];
@@ -75,17 +74,145 @@ function mergeBox(a: Box, b: Box): Box {
   };
 }
 
-/** Iterative 4-connectivity flood fill / connected component labeling over foreground pixels. */
+// ─────────────────────────────────────────────────────────────────────────────
+// Separator-line detection for continuous grid sheets (no transparent bg)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** Compute average brightness for each row or column */
+function computeLineBrightness(
+  px: Uint8ClampedArray,
+  width: number,
+  height: number,
+  isRow: boolean,
+): Float32Array {
+  const n = isRow ? height : width;
+  const m = isRow ? width : height;
+  const result = new Float32Array(n);
+  for (let i = 0; i < n; i++) {
+    let sum = 0;
+    for (let j = 0; j < m; j++) {
+      const idx = isRow ? (i * width + j) * 4 : (j * width + i) * 4;
+      sum += (px[idx] * 299 + px[idx + 1] * 587 + px[idx + 2] * 114) / 1000;
+    }
+    result[i] = sum / m;
+  }
+  return result;
+}
+
+/** Find positions that are local minima compared to nearby average, by at least `drop` */
+function findDarkLines(brightness: Float32Array, drop: number): number[] {
+  const n = brightness.length;
+  const w = Math.max(5, Math.min(40, Math.floor(n / 8))); // window
+  const candidates: number[] = [];
+
+  for (let i = w; i < n - w; i++) {
+    let leftAvg = 0, rightAvg = 0;
+    for (let d = 1; d <= w; d++) { leftAvg += brightness[i - d]; rightAvg += brightness[i + d]; }
+    leftAvg /= w; rightAvg /= w;
+    const context = (leftAvg + rightAvg) / 2;
+    if (context - brightness[i] >= drop) candidates.push(i);
+  }
+
+  // Cluster consecutive candidates → keep the darkest in each cluster
+  if (candidates.length === 0) return [];
+  const result: number[] = [];
+  let clusterStart = 0;
+  for (let i = 1; i <= candidates.length; i++) {
+    if (i === candidates.length || candidates[i] - candidates[i - 1] > 4) {
+      // Find darkest in cluster
+      let darkest = candidates[clusterStart];
+      for (let j = clusterStart + 1; j < i; j++) {
+        if (brightness[candidates[j]] < brightness[darkest]) darkest = candidates[j];
+      }
+      result.push(darkest);
+      clusterStart = i;
+    }
+  }
+  return result;
+}
+
+/** Check if an array of values (cell sizes) are roughly uniform (within 20% of mean) */
+function isUniform(sizes: number[]): boolean {
+  if (sizes.length === 0) return false;
+  const avg = sizes.reduce((a, b) => a + b, 0) / sizes.length;
+  return sizes.every(s => s > 2 && Math.abs(s - avg) <= avg * 0.25);
+}
+
+/**
+ * Try to detect if the sheet is a regular grid with thin border/separator lines.
+ * Returns rects if successful, null otherwise.
+ */
+function tryGridDetection(imageData: ImageData): SpriteRect[] | null {
+  const { width, height, data: px } = imageData;
+
+  const colB = computeLineBrightness(px, width, height, false);
+  const rowB = computeLineBrightness(px, width, height, true);
+
+  // Try thresholds from subtle to obvious separators
+  for (const drop of [8, 15, 25, 40, 60]) {
+    const xs = findDarkLines(colB, drop); // vertical separators
+    const ys = findDarkLines(rowB, drop); // horizontal separators
+
+    // Need at least some separators (could be 1D grid like strip of frames)
+    if (xs.length === 0 && ys.length === 0) continue;
+
+    // Build cell boundaries: [0, sep+1, sep+1, ..., end]
+    const xBounds = [0, ...xs.map(x => x + 1), width];
+    const yBounds = [0, ...ys.map(y => y + 1), height];
+    const cellWidths = [];
+    for (let i = 1; i < xBounds.length; i++) cellWidths.push(xBounds[i] - xBounds[i - 1]);
+    const cellHeights = [];
+    for (let i = 1; i < yBounds.length; i++) cellHeights.push(yBounds[i] - yBounds[i - 1]);
+
+    // All cells must be roughly the same size and non-trivial
+    if (!isUniform(cellWidths) || !isUniform(cellHeights)) continue;
+
+    const rects: SpriteRect[] = [];
+    let idx = 0;
+    for (let r = 0; r < yBounds.length - 1; r++) {
+      for (let c = 0; c < xBounds.length - 1; c++) {
+        const x = xBounds[c];
+        const y = yBounds[r];
+        const w = xBounds[c + 1] - x;
+        const h = yBounds[r + 1] - y;
+        if (w < 4 || h < 4) continue;
+        idx++;
+        rects.push({
+          id: nextId(),
+          name: `sprite_${String(idx).padStart(2, '0')}`,
+          x, y, width: w, height: h,
+        });
+      }
+    }
+
+    if (rects.length >= 2) return rects;
+  }
+
+  return null;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Main auto-detect: tries grid detection FIRST, falls back to flood-fill
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** Main entry: tries separator-line grid detection first, then flood-fill fallback. */
 export function autoDetectSprites(imageData: ImageData, settings: AutoSettings): SpriteRect[] {
   const { width, height, data: px } = imageData;
+
+  // ── Strategy 1: Always try separator-line grid detection first.
+  // Works great for sheets where frames are separated by thin dark border lines.
+  const gridResult = tryGridDetection(imageData);
+  if (gridResult && gridResult.length >= 2) return gridResult;
+
+  // ── Strategy 2: Flood-fill on foreground/background separation.
+  // Works for sheets where sprites sit on a transparent or solid-color background.
   const bg = settings.bgColor
     ? [settings.bgColor[0], settings.bgColor[1], settings.bgColor[2], 255] as [number, number, number, number]
     : guessBackgroundColor(imageData);
 
   const visited = new Uint8Array(width * height);
   const boxes: Box[] = [];
-  const stackX = new Int32Array(width * height);
-  const stackY = new Int32Array(width * height);
+  const stack: [number, number][] = [];
 
   for (let y = 0; y < height; y++) {
     for (let x = 0; x < width; x++) {
@@ -96,42 +223,26 @@ export function autoDetectSprites(imageData: ImageData, settings: AutoSettings):
         visited[idx] = 1;
         continue;
       }
-      // BFS/flood fill from this foreground pixel
-      let sp = 0;
-      stackX[sp] = x;
-      stackY[sp] = y;
-      sp += 1;
+      stack.length = 0;
+      stack.push([x, y]);
       visited[idx] = 1;
       let minX = x, maxX = x, minY = y, maxY = y;
 
-      while (sp > 0) {
-        sp -= 1;
-        const cx = stackX[sp];
-        const cy = stackY[sp];
+      while (stack.length > 0) {
+        const [cx, cy] = stack.pop()!;
         if (cx < minX) minX = cx;
         if (cx > maxX) maxX = cx;
         if (cy < minY) minY = cy;
         if (cy > maxY) maxY = cy;
 
-        const neighbors = [
-          [cx + 1, cy],
-          [cx - 1, cy],
-          [cx, cy + 1],
-          [cx, cy - 1],
-        ];
-        for (const [nx, ny] of neighbors) {
+        for (const [nx, ny] of [[cx + 1, cy], [cx - 1, cy], [cx, cy + 1], [cx, cy - 1]] as const) {
           if (nx < 0 || ny < 0 || nx >= width || ny >= height) continue;
           const nIdx = ny * width + nx;
           if (visited[nIdx]) continue;
-          const npi = nIdx * 4;
-          if (isBackgroundPixel(px, npi, settings, bg)) {
-            visited[nIdx] = 1;
-            continue;
-          }
           visited[nIdx] = 1;
-          stackX[sp] = nx;
-          stackY[sp] = ny;
-          sp += 1;
+          if (!isBackgroundPixel(px, nIdx * 4, settings, bg)) {
+            stack.push([nx, ny]);
+          }
         }
       }
 
@@ -139,7 +250,7 @@ export function autoDetectSprites(imageData: ImageData, settings: AutoSettings):
     }
   }
 
-  // Merge boxes that are within mergeDistance of each other (handles multi-part sprites)
+  // Merge boxes that are within mergeDistance of each other
   let merged = boxes;
   if (settings.mergeDistance > 0) {
     let changed = true;
@@ -174,7 +285,6 @@ export function autoDetectSprites(imageData: ImageData, settings: AutoSettings):
       const y1 = Math.min(height, box.maxY + 1 + pad);
       return { x, y, width: x1 - x, height: y1 - y };
     })
-    // reading order: top-to-bottom rows, then left-to-right within a row (using height as row tolerance)
     .sort((a, b) => {
       const rowTolerance = Math.max(a.height, b.height) / 2;
       if (Math.abs(a.y - b.y) > rowTolerance) return a.y - b.y;

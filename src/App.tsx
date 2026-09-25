@@ -65,6 +65,7 @@ export default function App() {
   const [exporting, setExporting] = useState(false);
   const [dragOver, setDragOver] = useState(false);
   const [showHelp, setShowHelp] = useState(false);
+  const [boxColor, setBoxColor] = useState('#5fc9ff');
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const setSprites = useCallback((updater: (prev: SpriteRect[]) => SpriteRect[]) => {
@@ -248,6 +249,7 @@ export default function App() {
           setSelectedId={setSelectedId}
           pickingColor={pickingColor}
           onPickPixel={handlePickPixel}
+          boxColor={boxColor}
         />
         <Sidebar
           mode={mode}
@@ -273,6 +275,8 @@ export default function App() {
           zoom={zoom}
           setZoom={setZoom}
           onFitZoom={() => fitZoom()}
+          boxColor={boxColor}
+          setBoxColor={setBoxColor}
           onExportZip={handleExportZip}
           onExportJson={handleExportJson}
           exporting={exporting}
